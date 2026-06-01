@@ -11,11 +11,15 @@ chmod +x askai
 ln -s "$PWD/askai" /usr/local/bin/askai   # or anywhere on $PATH
 ```
 
-Put your Anthropic API key in `~/.extra_secrets`:
+Copy `.env.example` to `.env` (gitignored) and fill in your key:
 
+```bash
+cp .env.example .env
+# edit .env and set ANTHROPIC_API_KEY=sk-ant-...
+chmod 600 .env
 ```
-ANTHROPIC_API_KEY=sk-ant-...
-```
+
+`.env` lives next to the `askai` script in the repo and is loaded at startup.
 
 ## Use
 

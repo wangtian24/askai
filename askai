@@ -8,7 +8,7 @@ import urllib.request
 import urllib.error
 
 MODEL = "claude-haiku-4-5-20251001"
-SECRETS_PATH = os.path.expanduser("~/.extra_secrets")
+ENV_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), ".env")
 API_URL = "https://api.anthropic.com/v1/messages"
 
 SYSTEM_PROMPT = """You are askai, a terminal assistant. The user gives you a prompt.
@@ -51,14 +51,19 @@ ANSI_RED = "\033[31m"
 
 
 def load_api_key():
-    if not os.path.exists(SECRETS_PATH):
-        sys.exit(f"missing {SECRETS_PATH}")
-    with open(SECRETS_PATH) as f:
+    if not os.path.exists(ENV_PATH):
+        sys.exit(f"missing {ENV_PATH} — copy .env.example to .env and fill in ANTHROPIC_API_KEY")
+    with open(ENV_PATH) as f:
         for line in f:
             line = line.strip()
+            if not line or line.startswith("#"):
+                continue
             if line.startswith("ANTHROPIC_API_KEY="):
-                return line.split("=", 1)[1].strip()
-    sys.exit("ANTHROPIC_API_KEY not found in ~/.extra_secrets")
+                value = line.split("=", 1)[1].strip()
+                if value.startswith(("'", '"')) and value.endswith(value[0]):
+                    value = value[1:-1]
+                return value
+    sys.exit(f"ANTHROPIC_API_KEY not found in {ENV_PATH}")
 
 
 def call_claude(api_key, messages):
