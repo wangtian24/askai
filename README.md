@@ -19,7 +19,7 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-`.env` lives next to the `askai` script in the repo and is loaded at startup.
+`.env` lives next to the `askai` script in the repo and is loaded at startup. Override the model with `ANTHROPIC_MODEL=...` in `.env` (defaults to `claude-haiku-4-5-20251001`).
 
 ## Use
 

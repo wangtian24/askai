@@ -7,7 +7,7 @@ import unicodedata
 import urllib.request
 import urllib.error
 
-MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 ENV_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), ".env")
 API_URL = "https://api.anthropic.com/v1/messages"
 
@@ -50,25 +50,28 @@ ANSI_YELLOW = "\033[33m"
 ANSI_RED = "\033[31m"
 
 
-def load_api_key():
+def load_env():
     if not os.path.exists(ENV_PATH):
         sys.exit(f"missing {ENV_PATH} — copy .env.example to .env and fill in ANTHROPIC_API_KEY")
+    env = {}
     with open(ENV_PATH) as f:
         for line in f:
             line = line.strip()
-            if not line or line.startswith("#"):
+            if not line or line.startswith("#") or "=" not in line:
                 continue
-            if line.startswith("ANTHROPIC_API_KEY="):
-                value = line.split("=", 1)[1].strip()
-                if value.startswith(("'", '"')) and value.endswith(value[0]):
-                    value = value[1:-1]
-                return value
-    sys.exit(f"ANTHROPIC_API_KEY not found in {ENV_PATH}")
+            k, v = line.split("=", 1)
+            v = v.strip()
+            if len(v) >= 2 and v[0] in ("'", '"') and v[-1] == v[0]:
+                v = v[1:-1]
+            env[k.strip()] = v
+    if "ANTHROPIC_API_KEY" not in env:
+        sys.exit(f"ANTHROPIC_API_KEY not found in {ENV_PATH}")
+    return env
 
 
-def call_claude(api_key, messages):
+def call_claude(api_key, model, messages):
     body = json.dumps({
-        "model": MODEL,
+        "model": model,
         "max_tokens": 1024,
         "system": SYSTEM_PROMPT,
         "messages": messages,
@@ -220,9 +223,9 @@ def run_cmd(cmd):
     print()
 
 
-def turn(api_key, messages, user_prompt):
+def turn(api_key, model, messages, user_prompt):
     messages.append({"role": "user", "content": user_prompt})
-    raw = call_claude(api_key, messages)
+    raw = call_claude(api_key, model, messages)
     messages.append({"role": "assistant", "content": raw})
     parsed = parse_response(raw)
     options = []
@@ -240,9 +243,11 @@ def turn(api_key, messages, user_prompt):
 def main():
     if len(sys.argv) < 2:
         sys.exit("usage: askai '<prompt>'")
-    api_key = load_api_key()
+    env = load_env()
+    api_key = env["ANTHROPIC_API_KEY"]
+    model = env.get("ANTHROPIC_MODEL") or DEFAULT_MODEL
     messages = []
-    options = turn(api_key, messages, " ".join(sys.argv[1:]))
+    options = turn(api_key, model, messages, " ".join(sys.argv[1:]))
 
     while True:
         try:
@@ -258,7 +263,7 @@ def main():
             # number on the next turn isn't reinterpreted against old options.
             options = []
             continue
-        options = turn(api_key, messages, line)
+        options = turn(api_key, model, messages, line)
 
 
 if __name__ == "__main__":
