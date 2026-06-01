@@ -3,7 +3,7 @@ import json
 import os
 import subprocess
 import sys
-import textwrap
+import unicodedata
 import urllib.request
 import urllib.error
 
@@ -15,15 +15,30 @@ SYSTEM_PROMPT = """You are askai, a terminal assistant. The user gives you a pro
 
 Decide if the user is asking for a bash command/script (something they want to run on macOS/Linux), or asking a normal question. Use the prior conversation as context for follow-ups.
 
-Respond with ONLY a JSON object, no prose, no markdown fences.
+Respond using ONLY the tagged plain-text format below — no JSON, no markdown fences, no extra prose.
 
-If it's a bash request, respond:
-{"type": "bash", "options": [{"cmd": "<one-line or multi-line bash>", "desc": "<short description>"}, ...]}
-- Provide 1-3 options, ordered most-recommended first.
-- Each cmd must be directly runnable in bash. No placeholders unless unavoidable.
+For a bash request, output one or more option blocks (1-3 options, best first):
 
-If it's a normal question, respond:
-{"type": "answer", "text": "<one concise paragraph>"}
+@@TYPE bash
+@@OPT
+@@DESC <short description>
+@@CMD
+<bash command, one or more lines, directly runnable>
+@@OPT
+@@DESC <short description>
+@@CMD
+<bash command>
+
+For a normal question, output:
+
+@@TYPE answer
+@@TEXT
+<one concise paragraph; plain text, may include quotes and any characters>
+
+Rules:
+- Every directive line begins with @@ at column 0.
+- @@CMD and @@TEXT consume every following line until the next @@ line or end of message.
+- No placeholders in commands unless unavoidable.
 """
 
 ANSI_RESET = "\033[0m"
@@ -74,34 +89,107 @@ def call_claude(api_key, messages):
 
 def parse_response(text):
     text = text.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1:
+    if not text.startswith("@@"):
+        # model didn't follow format; treat the whole thing as an answer
         return {"type": "answer", "text": text}
-    try:
-        return json.loads(text[start:end + 1])
-    except json.JSONDecodeError:
-        return {"type": "answer", "text": text}
+
+    kind = None
+    answer_lines = []
+    options = []
+    cur_opt = None
+    mode = None  # None | "text" | "cmd"
+
+    for line in text.splitlines():
+        if line.startswith("@@"):
+            rest = line[2:].strip()
+            head, _, arg = rest.partition(" ")
+            head = head.upper()
+            arg = arg.strip()
+            if head == "TYPE":
+                kind = arg.lower()
+                mode = None
+            elif head == "OPT":
+                if cur_opt is not None:
+                    options.append(cur_opt)
+                cur_opt = {"desc": "", "cmd": ""}
+                mode = None
+            elif head == "DESC":
+                if cur_opt is None:
+                    cur_opt = {"desc": "", "cmd": ""}
+                cur_opt["desc"] = arg
+                mode = None
+            elif head == "CMD":
+                if cur_opt is None:
+                    cur_opt = {"desc": "", "cmd": ""}
+                mode = "cmd"
+            elif head == "TEXT":
+                mode = "text"
+            else:
+                mode = None
+        else:
+            if mode == "cmd" and cur_opt is not None:
+                cur_opt["cmd"] += line + "\n"
+            elif mode == "text":
+                answer_lines.append(line)
+
+    if cur_opt is not None:
+        options.append(cur_opt)
+
+    if kind == "bash":
+        for o in options:
+            o["cmd"] = o["cmd"].rstrip("\n")
+        return {"type": "bash", "options": options}
+    if kind == "answer":
+        return {"type": "answer", "text": "\n".join(answer_lines).strip()}
+    return {"type": "answer", "text": text}
+
+
+def char_width(ch):
+    if unicodedata.east_asian_width(ch) in ("W", "F"):
+        return 2
+    if unicodedata.category(ch) in ("Mn", "Me", "Cf"):
+        return 0
+    return 1
+
+
+def visual_wrap(text, width):
+    lines = []
+    buf = []
+    buf_w = 0
+    last_space = -1  # index in buf where we can break (after a space)
+    for ch in text:
+        if ch == "\n":
+            lines.append("".join(buf).rstrip())
+            buf, buf_w, last_space = [], 0, -1
+            continue
+        cw = char_width(ch)
+        if buf_w + cw > width and buf:
+            if last_space >= 0:
+                head = "".join(buf[:last_space]).rstrip()
+                tail = "".join(buf[last_space + 1:])
+                lines.append(head)
+                buf = list(tail)
+                buf_w = sum(char_width(c) for c in buf)
+                last_space = -1
+            else:
+                lines.append("".join(buf))
+                buf, buf_w, last_space = [], 0, -1
+        if ch == " " and buf_w == 0:
+            continue  # skip leading spaces on a wrapped line
+        if ch == " ":
+            last_space = len(buf)
+        buf.append(ch)
+        buf_w += cw
+    if buf:
+        lines.append("".join(buf).rstrip())
+    return lines
 
 
 def render_answer(text):
     print()
     for paragraph in text.split("\n\n"):
-        wrapped = textwrap.fill(
-            paragraph.strip(),
-            width=60,
-            initial_indent="  ",
-            subsequent_indent="  ",
-            break_long_words=False,
-            break_on_hyphens=False,
-        )
-        if wrapped:
-            print(wrapped)
+        for line in visual_wrap(paragraph.strip(), 100):
+            print(f"  {line}")
     print()
 
 
