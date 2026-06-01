@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+import json
+import os
+import subprocess
+import sys
+import urllib.request
+import urllib.error
+
+MODEL = "claude-haiku-4-5-20251001"
+SECRETS_PATH = os.path.expanduser("~/.extra_secrets")
+API_URL = "https://api.anthropic.com/v1/messages"
+
+SYSTEM_PROMPT = """You are askai, a terminal assistant. The user gives you a prompt.
+
+Decide if the user is asking for a bash command/script (something they want to run on macOS/Linux), or asking a normal question.
+
+Respond with ONLY a JSON object, no prose, no markdown fences.
+
+If it's a bash request, respond:
+{"type": "bash", "options": [{"cmd": "<one-line or multi-line bash>", "desc": "<short description>"}, ...]}
+- Provide 1-3 options, ordered most-recommended first.
+- Each cmd must be directly runnable in bash. No placeholders unless unavoidable.
+
+If it's a normal question, respond:
+{"type": "answer", "text": "<one concise paragraph>"}
+"""
+
+ANSI_RESET = "\033[0m"
+ANSI_DIM = "\033[2m"
+ANSI_BOLD = "\033[1m"
+ANSI_CYAN = "\033[36m"
+ANSI_GREEN = "\033[32m"
+ANSI_YELLOW = "\033[33m"
+ANSI_RED = "\033[31m"
+
+
+def load_api_key():
+    if not os.path.exists(SECRETS_PATH):
+        sys.exit(f"missing {SECRETS_PATH}")
+    with open(SECRETS_PATH) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("ANTHROPIC_API_KEY="):
+                return line.split("=", 1)[1].strip()
+    sys.exit("ANTHROPIC_API_KEY not found in ~/.extra_secrets")
+
+
+def call_claude(api_key, user_prompt):
+    body = json.dumps({
+        "model": MODEL,
+        "max_tokens": 1024,
+        "system": SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": user_prompt}],
+    }).encode()
+    req = urllib.request.Request(
+        API_URL,
+        data=body,
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        sys.exit(f"API error {e.code}: {e.read().decode(errors='replace')}")
+    except urllib.error.URLError as e:
+        sys.exit(f"network error: {e}")
+    return data["content"][0]["text"]
+
+
+def parse_response(text):
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1:
+        return {"type": "answer", "text": text}
+    try:
+        return json.loads(text[start:end + 1])
+    except json.JSONDecodeError:
+        return {"type": "answer", "text": text}
+
+
+def render_answer(text):
+    print()
+    print(f"  {text}")
+    print()
+
+
+def render_bash(options):
+    if not options:
+        sys.exit("no commands returned")
+    print()
+    for i, opt in enumerate(options, 1):
+        desc = opt.get("desc", "")
+        cmd = opt.get("cmd", "")
+        print(f"  {ANSI_BOLD}{ANSI_CYAN}[{i}]{ANSI_RESET} {ANSI_DIM}{desc}{ANSI_RESET}")
+        for line in cmd.splitlines() or [""]:
+            print(f"      {ANSI_GREEN}{line}{ANSI_RESET}")
+        print()
+    if len(options) == 1:
+        prompt = f"  {ANSI_YELLOW}run? [y/N]:{ANSI_RESET} "
+    else:
+        prompt = f"  {ANSI_YELLOW}pick [1-{len(options)}] or N to skip:{ANSI_RESET} "
+    try:
+        choice = input(prompt).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+    if len(options) == 1:
+        if choice in ("y", "yes"):
+            run_cmd(options[0]["cmd"])
+        return
+    if not choice or choice in ("n", "no"):
+        return
+    if not choice.isdigit() or not (1 <= int(choice) <= len(options)):
+        print(f"  {ANSI_RED}invalid choice{ANSI_RESET}")
+        return
+    run_cmd(options[int(choice) - 1]["cmd"])
+
+
+def run_cmd(cmd):
+    print(f"  {ANSI_DIM}$ {cmd}{ANSI_RESET}")
+    print()
+    rc = subprocess.call(cmd, shell=True, executable="/bin/bash")
+    if rc != 0:
+        print()
+        print(f"  {ANSI_RED}exit {rc}{ANSI_RESET}")
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit("usage: askai '<prompt>'")
+    prompt = " ".join(sys.argv[1:])
+    api_key = load_api_key()
+    raw = call_claude(api_key, prompt)
+    parsed = parse_response(raw)
+    if parsed.get("type") == "bash":
+        render_bash(parsed.get("options", []))
+    else:
+        render_answer(parsed.get("text", raw).strip())
+
+
+if __name__ == "__main__":
+    main()
