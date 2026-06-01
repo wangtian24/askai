@@ -12,7 +12,7 @@ API_URL = "https://api.anthropic.com/v1/messages"
 
 SYSTEM_PROMPT = """You are askai, a terminal assistant. The user gives you a prompt.
 
-Decide if the user is asking for a bash command/script (something they want to run on macOS/Linux), or asking a normal question.
+Decide if the user is asking for a bash command/script (something they want to run on macOS/Linux), or asking a normal question. Use the prior conversation as context for follow-ups.
 
 Respond with ONLY a JSON object, no prose, no markdown fences.
 
@@ -45,12 +45,12 @@ def load_api_key():
     sys.exit("ANTHROPIC_API_KEY not found in ~/.extra_secrets")
 
 
-def call_claude(api_key, user_prompt):
+def call_claude(api_key, messages):
     body = json.dumps({
         "model": MODEL,
         "max_tokens": 1024,
         "system": SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": user_prompt}],
+        "messages": messages,
     }).encode()
     req = urllib.request.Request(
         API_URL,
@@ -95,8 +95,6 @@ def render_answer(text):
 
 
 def render_bash(options):
-    if not options:
-        sys.exit("no commands returned")
     print()
     for i, opt in enumerate(options, 1):
         desc = opt.get("desc", "")
@@ -105,47 +103,58 @@ def render_bash(options):
         for line in cmd.splitlines() or [""]:
             print(f"      {ANSI_GREEN}{line}{ANSI_RESET}")
         print()
-    if len(options) == 1:
-        prompt = f"  {ANSI_YELLOW}run? [y/N]:{ANSI_RESET} "
-    else:
-        prompt = f"  {ANSI_YELLOW}pick [1-{len(options)}] or N to skip:{ANSI_RESET} "
-    try:
-        choice = input(prompt).strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return
-    if len(options) == 1:
-        if choice in ("y", "yes"):
-            run_cmd(options[0]["cmd"])
-        return
-    if not choice or choice in ("n", "no"):
-        return
-    if not choice.isdigit() or not (1 <= int(choice) <= len(options)):
-        print(f"  {ANSI_RED}invalid choice{ANSI_RESET}")
-        return
-    run_cmd(options[int(choice) - 1]["cmd"])
 
 
 def run_cmd(cmd):
+    print()
     print(f"  {ANSI_DIM}$ {cmd}{ANSI_RESET}")
     print()
     rc = subprocess.call(cmd, shell=True, executable="/bin/bash")
     if rc != 0:
         print()
         print(f"  {ANSI_RED}exit {rc}{ANSI_RESET}")
+    print()
+
+
+def turn(api_key, messages, user_prompt):
+    messages.append({"role": "user", "content": user_prompt})
+    raw = call_claude(api_key, messages)
+    messages.append({"role": "assistant", "content": raw})
+    parsed = parse_response(raw)
+    options = []
+    if parsed.get("type") == "bash":
+        options = parsed.get("options", []) or []
+        if not options:
+            render_answer("(no commands returned)")
+        else:
+            render_bash(options)
+    else:
+        render_answer(parsed.get("text", raw).strip())
+    return options
 
 
 def main():
     if len(sys.argv) < 2:
         sys.exit("usage: askai '<prompt>'")
-    prompt = " ".join(sys.argv[1:])
     api_key = load_api_key()
-    raw = call_claude(api_key, prompt)
-    parsed = parse_response(raw)
-    if parsed.get("type") == "bash":
-        render_bash(parsed.get("options", []))
-    else:
-        render_answer(parsed.get("text", raw).strip())
+    messages = []
+    options = turn(api_key, messages, " ".join(sys.argv[1:]))
+
+    while True:
+        try:
+            line = input(f"  {ANSI_YELLOW}>{ANSI_RESET} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if not line:
+            return
+        if options and line.isdigit() and 1 <= int(line) <= len(options):
+            run_cmd(options[int(line) - 1]["cmd"])
+            # after running, stay in the loop but clear options so a stray
+            # number on the next turn isn't reinterpreted against old options.
+            options = []
+            continue
+        options = turn(api_key, messages, line)
 
 
 if __name__ == "__main__":
