@@ -1,6 +1,6 @@
 # askai
 
-Tiny CLI that asks Claude Haiku one question and either runs a bash command for you or answers a normal question.
+A tiny CLI that asks Claude a question and either runs a bash command for you or returns a plain-language answer.
 
 ## Install
 
@@ -21,7 +21,7 @@ chmod 600 .env
 
 `.env` lives next to the `askai` script in the repo and is loaded at startup. Override the model with `ANTHROPIC_MODEL=...` in `.env` (defaults to `claude-haiku-4-5-20251001`).
 
-## Use
+## Usage
 
 ```bash
 askai 'find all files larger than 100MB under my home'
@@ -31,3 +31,4 @@ askai 'what is the capital of mongolia'
 If the prompt looks like a bash request, askai prints 1–3 command options; pick one and it runs immediately. Otherwise it prints a one-paragraph answer.
 
 Uses `claude-haiku-4-5-20251001`, one turn, stdlib only (no pip install).
+
